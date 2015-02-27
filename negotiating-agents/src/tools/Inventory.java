@@ -1,11 +1,10 @@
 package tools;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Iterator;
+import java.util.*;
 
 public class Inventory {
+  private static Random rng = new Random(System.currentTimeMillis());
+
 	//Using arraylist as it allows for shuffle()
 	static ArrayList<String> items = new ArrayList<String>(Arrays.asList("axe","sword","pants","food","sleeping bag",
 																		 "amulet","tunic","helmet","mace","armguards",
@@ -13,7 +12,7 @@ public class Inventory {
 	static ArrayList<Integer> values = new ArrayList<Integer>(Arrays.asList(35, 30, 15, 10, 10, 55, 30, 25, 30, 15, 15, 20, 25, 5));
 	
 	public static ArrayList<String> getRandomItemSet(){
-		Collections.shuffle(items);
+		Collections.shuffle(items, rng);
 		
 		//Items to give to agent, and the items it wants
 		ArrayList<String> myItems = new ArrayList<String>(8);

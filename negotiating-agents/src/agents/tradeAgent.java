@@ -4,6 +4,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.sun.deploy.util.StringUtils;
 import jade.core.behaviours.SimpleBehaviour;
 import tools.Inventory;
 import jade.core.AID;
@@ -379,18 +380,20 @@ protected void register() {
 private class RequestInventoryAndWantedItems extends OneShotBehaviour {
 	public void action() {
 		List<String> tItems = tools.Inventory.getRandomItemSet();
-    System.out.println(myAgent.getLocalName()+" says: I'm selling these items;");
 		for (int i = 0; i < 5; i++) {
 			sellingItems.add(tItems.remove(0));
-			System.out.println("  " + sellingItems.get(i));
 		}
 
-		System.out.println(myAgent.getLocalName()+" says: I want these items;");
 		while (tItems.size() > 0) {
 			wantedItems.add(tItems.remove(0));
-			System.out.println("  " + wantedItems.get(wantedItems.size() - 1));
 		}
-		System.out.println("");
+
+    System.out.printf("%s says: I'm selling these items [%s]\n",
+      myAgent.getLocalName(), StringUtils.join(sellingItems, ", ")
+    );
+    System.out.printf("%s says: I'm buying these items [%s]\n",
+      myAgent.getLocalName(), StringUtils.join(wantedItems, ", ")
+    );
 	}
 }//End
 }
