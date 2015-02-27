@@ -3,8 +3,8 @@ package agents;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
-import com.sun.deploy.util.StringUtils;
 import jade.core.behaviours.SimpleBehaviour;
 import tools.Inventory;
 import jade.core.AID;
@@ -34,6 +34,10 @@ public class TradeAgent extends Agent {
   private int currentRound = 1;
   private double myRoll;
   private int remainingRolls;
+  // Sometimes, if agents start at the same time, you might get spammed
+  // with requests to gamble. We use this int to make sure you only gamble
+  // in one round once.
+  private String lastRoundRolledIn = "";
 
   private int currentBiddingRound = 1;
   private String activeBiddingRoundID;
@@ -78,6 +82,8 @@ protected void tryInitializeGamblingRound() {
   for (AID agent : agents) {
     requestToGamble.addReceiver(agent);
   }
+
+  send(requestToGamble);
 }
 
 /**
@@ -85,16 +91,20 @@ protected void tryInitializeGamblingRound() {
  */
 private class GambleForAuctionChance extends CyclicBehaviour {
   public void action() {
+    String gamblingRoundID = "gambling-round-" + currentRound;
+
     MessageTemplate mt = MessageTemplate.and(
       MessageTemplate.MatchPerformative(ACLMessage.REQUEST),
-      MessageTemplate.MatchConversationId("gambling-round-" + currentRound)
+      MessageTemplate.MatchConversationId(gamblingRoundID)
     );
     ACLMessage msg = myAgent.receive(mt);
 
-    if(msg != null) {
+    if(msg != null && !msg.getConversationId().equals(lastRoundRolledIn)) {
       // If we don't have any items to sell, we don't want to win the gamble.
       myRoll = sellingItems.isEmpty() ? 0.0 : rng.nextDouble();
-      System.out.println(myAgent.getLocalName() + " rolled a " + myRoll);
+      System.out.printf("%s says: I rolled a %f in round %s\n",
+        myAgent.getLocalName(), myRoll, gamblingRoundID
+      );
 
       ACLMessage reply = new ACLMessage(ACLMessage.INFORM);
       reply.setConversationId("gambling-round-" + currentRound);
@@ -109,6 +119,7 @@ private class GambleForAuctionChance extends CyclicBehaviour {
       remainingRolls = agentList.length - 1;
       myAgent.addBehaviour(new ReceiveGambleRolls());
 
+      lastRoundRolledIn = gamblingRoundID;
     } else {
       block();
     }
@@ -132,13 +143,14 @@ private class ReceiveGambleRolls extends CyclicBehaviour {
       remainingRolls--;
 
       if (remainingRolls == 0) {
-        myAgent.removeBehaviour(this);
         currentRound++;
 
         if (myRoll > Collections.max(rolls)) {
-          System.out.println(myAgent.getLocalName() + " is the winner if the gambling round");
+          System.out.println(myAgent.getLocalName() + " is the winner of the gambling round");
           myAgent.addBehaviour(new SellItem());
         }
+
+        myAgent.removeBehaviour(this);
       }
     } else {
       block();
@@ -178,6 +190,9 @@ private class SellItem extends SimpleBehaviour {
         // Pick a random item to sell
         ACLMessage announceMsg;
         sellItem = sellingItems.get(rng.nextInt(sellingItems.size()));
+        System.out.printf("%s says: I'm selling item %s\n",
+          myAgent.getLocalName(), sellItem
+        );
         announceMsg = new ACLMessage(ACLMessage.CFP);
         announceMsg.setConversationId(conversationID);
         announceMsg.setContent(sellItem);
@@ -223,8 +238,8 @@ private class SellItem extends SimpleBehaviour {
           ACLMessage accept = new ACLMessage(ACLMessage.ACCEPT_PROPOSAL);
           accept.setConversationId(conversationID);
           accept.setContent(sellItem);
+          accept.addReceiver(bestBidder);
           sellingItems.remove(sellItem);
-          myAgent.send(accept);
           System.out.printf(
             "%s says: accepting bid of %d from %s, and sending item\n",
             myAgent.getLocalName(),
@@ -232,9 +247,11 @@ private class SellItem extends SimpleBehaviour {
             bestBidder.getLocalName()
           );
 
+          myAgent.send(accept);
+
           state = RECEIVE_PAYMENT;
         } else {
-          System.out.println(myAgent.getLocalName() + "says: no bid was accepted");
+          System.out.println(myAgent.getLocalName() + " says: no bid was accepted");
           state = INIT_NEW_GAMBLE;
         }
         break;
@@ -244,15 +261,20 @@ private class SellItem extends SimpleBehaviour {
           MessageTemplate.MatchConversationId(conversationID)
         );
         ACLMessage paymentMsg = myAgent.receive(mt);
-        int payment = Integer.parseInt(paymentMsg.getContent());
-        System.out.println(myAgent.getLocalName() + " says: received payment of " + payment);
-        gold += payment;
-        state = INIT_NEW_GAMBLE;
+        if (paymentMsg != null) {
+          int payment = Integer.parseInt(paymentMsg.getContent());
+          System.out.println(myAgent.getLocalName() + " says: received payment of " + payment);
+          gold += payment;
+          state = INIT_NEW_GAMBLE;
+        } else {
+          block();
+        }
         break;
       case INIT_NEW_GAMBLE:
         currentBiddingRound++;
         tryInitializeGamblingRound();
         state = DONE;
+        System.out.println("");
         break;
     }
   }
@@ -290,7 +312,11 @@ private class BidOnItems extends CyclicBehaviour {
 
       // TODO: this is a bit of a hack to increment bidding round id globally.
       Matcher matcher = Pattern.compile("\\d+").matcher(activeBiddingRoundID);
-      currentBiddingRound = Integer.parseInt(matcher.group());
+      if (matcher.find()) {
+        currentBiddingRound = Integer.parseInt(matcher.group());
+      } else {
+        System.out.println("NOOOO, couldn't find the number in " + activeBiddingRoundID);
+      }
 
       myAgent.send(propose);
     } else {
@@ -320,9 +346,10 @@ private class ProcessBidResponses extends CyclicBehaviour {
         reply.setContent(Integer.toString(activeBid));
         gold -= activeBid;
         wantedItems.remove(msg.getContent());
-        System.out.printf("%s says: received %s from, sending back %d\n",
+        System.out.printf("%s says: received %s, sending back %d gold\n",
           myAgent.getLocalName(), msg.getContent(), activeBid
         );
+        myAgent.send(reply);
       }
 
       activeBid = 0;
@@ -389,10 +416,10 @@ private class RequestInventoryAndWantedItems extends OneShotBehaviour {
 		}
 
     System.out.printf("%s says: I'm selling these items [%s]\n",
-      myAgent.getLocalName(), StringUtils.join(sellingItems, ", ")
+      myAgent.getLocalName(), sellingItems.stream().collect(Collectors.joining(", "))
     );
     System.out.printf("%s says: I'm buying these items [%s]\n",
-      myAgent.getLocalName(), StringUtils.join(wantedItems, ", ")
+      myAgent.getLocalName(), wantedItems.stream().collect(Collectors.joining(", "))
     );
 	}
 }//End
