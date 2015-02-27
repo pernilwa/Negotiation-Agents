@@ -1,8 +1,9 @@
 package agents;
 
 import java.util.ArrayList;
+import java.util.List;
 
-import tools.GetInventory;
+import tools.Inventory;
 import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.Behaviour;
@@ -16,14 +17,15 @@ import jade.lang.acl.ACLMessage;
 import jade.lang.acl.MessageTemplate;
 
 @SuppressWarnings("serial")
-public class tradeAgent extends Agent {
+public class TradeAgent extends Agent {
 
-	private ArrayList<String> tItems = new ArrayList<String>(11);
+  private final static String serviceType = "trader-agent";
+
 	private ArrayList<String> items = new ArrayList<String>(11);
 	private ArrayList<String> wantedItems = new ArrayList<String>(3);
 	private ArrayList<AID> traderAgents = new ArrayList<AID>();
 	private ArrayList<AID> contactList = new ArrayList<AID>();
-	private int cleared = 0;
+	private int cleared = 0; // TODO: better name
 	private int gold = 100;
 	
 protected void setup(){	
@@ -33,10 +35,10 @@ protected void setup(){
 		register();
 		
 		//Get items and wantedItems
-		addBehaviour(new arrangeInventory());
+		addBehaviour(new RequestInventoryAndWantedItems());
 		
 		//Waits until told to start trade process
-		addBehaviour(new goCode());
+		addBehaviour(new GoCode());
 				
 		//Wait for item checks
 		addBehaviour(new CheckForItem());
@@ -46,15 +48,15 @@ protected void setup(){
 	}
 
 /**
- * Inner class goCode
+ * Inner class GoCode
  * This class allows the trade agents to wait with trading until
  * told to start. This is to allow all the trader agents to get
  * their inventories and register with DF service so we don't miss
  * any.
  */
-private class goCode extends CyclicBehaviour{
+private class GoCode extends CyclicBehaviour {
 	public void action() {
-		MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.CFP);
+		MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.CFP); // TODO: probably wrong performative, inform is better
 		ACLMessage msg = myAgent.receive(mt);
 		
 		if(msg != null){
@@ -82,7 +84,7 @@ private class goCode extends CyclicBehaviour{
  * has it is removed, if trade is successful or failure it is removed. When no
  * items remain it passes trade priority on to another agent.
  */
-private class StartTrading extends Behaviour{
+private class StartTrading extends Behaviour {
 	private MessageTemplate mt;
 	private String tradeItem = null;
 	private int bestBid = 0;
@@ -102,7 +104,7 @@ private class StartTrading extends Behaviour{
 			//move to step 1, otherwise pass trade priority on to next agent.			
 			try {
 				tradeItem = wantedItems.get(0);
-				if(GetInventory.getValue(tradeItem) > gold){
+				if(Inventory.getValue(tradeItem) > gold){
 					tradeItem = null;
 					wantedItems.remove(0);
 					step = 0;
@@ -208,7 +210,7 @@ private class StartTrading extends Behaviour{
 			
 			//Buyer update
 			wantedItems.remove(tradeItem);
-			gold = gold - GetInventory.getValue(tradeItem);
+			gold = gold - Inventory.getValue(tradeItem);
 
 			step = 5;
 			break;
@@ -237,35 +239,29 @@ private class StartTrading extends Behaviour{
  * This class responds to trade requests from TA agent. Check to see if we have
  * the item requested and if so send confirm back.
  */
-private class CheckForItem extends CyclicBehaviour{
+private class CheckForItem extends CyclicBehaviour {
 	public void action() {
 		String trItem;
 		MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.REQUEST);
 		ACLMessage msg = myAgent.receive(mt);
-		int bid = 0;
 		
 		if(msg != null){
 			trItem = msg.getContent();
 			ACLMessage reply = msg.createReply();
 			System.out.println(myAgent.getLocalName()+" agent checking for item: "+trItem);
-			
-			for (String str : items) {
-				if(str.matches(trItem)){
+
+      if (items.contains(trItem)) {;
 					System.out.println(myAgent.getLocalName()+" agent has that item for sale");
-					bid = GetInventory.getValue(trItem);
+					int bid = Inventory.getValue(trItem);
 					reply.setPerformative(ACLMessage.CONFIRM);
 					reply.setContent(Integer.toString(bid));
-					break;
-				}
-				else{
-					// We dont have that item
+			} else {
+					// We don't have that item
 					reply.setPerformative(ACLMessage.REFUSE);
 					reply.setContent("not-available");
-				}
 			}
 			myAgent.send(reply);
-		}
-		else{
+		} else {
 			block();
 		}
 	}
@@ -276,7 +272,7 @@ private class CheckForItem extends CyclicBehaviour{
  * Inner class Trader
  * Handles acceptance of trades
  */
-private class Trading extends CyclicBehaviour{
+private class Trading extends CyclicBehaviour {
 
 	public void action() {
 		
@@ -285,7 +281,7 @@ private class Trading extends CyclicBehaviour{
 		if(msg != null){
 			//Update based upon sold item		
 			items.remove(msg.getContent());
-			gold = gold + GetInventory.getValue(msg.getContent());
+			gold += Inventory.getValue(msg.getContent());
 		}
 		else{
 			block();
@@ -299,31 +295,30 @@ private class Trading extends CyclicBehaviour{
  * Retrieves other available trader agents from DF agent
  * and adds them to traderAgents list.
  */
-private class GetAgentList extends OneShotBehaviour{
+private class GetAgentList extends OneShotBehaviour {
 	public void action() {
 	if(traderAgents.isEmpty()){
 		System.out.println(myAgent.getLocalName()+" says: Getting registered trading agents.");
 		
 		DFAgentDescription template = new DFAgentDescription();
 		ServiceDescription sd = new ServiceDescription();
-		sd.setType("trader-agent");
+		sd.setType(serviceType);
 		template.addServices(sd);
 		
 		try{
 			DFAgentDescription[] result = DFService.search(myAgent, template);	
 			System.out.println(myAgent.getLocalName()+" says: Found "+(result.length-1)+" agents, acquiring.");
 			for (int i = 0; i < result.length; ++i) {	
-				if (result[i].getName().getLocalName().equals(myAgent.getLocalName())) {
+				if (result[i].getName().equals(myAgent)) {
 					continue;
 				}
-				else {
-					traderAgents.add(result[i].getName());				
-				}
+
+				traderAgents.add(result[i].getName());
 			}
 			
 			System.out.println("Agent list: ");
 			for (int i = 0; i < traderAgents.size(); i++) {
-				System.out.println("Agent #" +i+ "-" +traderAgents.get(i));
+				System.out.println("Agent #" + i + "-" +traderAgents.get(i));
 			}
 		}
 		catch(FIPAException fe){
@@ -331,8 +326,7 @@ private class GetAgentList extends OneShotBehaviour{
 			fe.printStackTrace();
 		}
 		contactList = traderAgents;
-		System.out.println("--");
-		System.out.println("");	
+		System.out.println("--\n");
 	}
 } 	
 }// End of inner class getAgentList
@@ -340,13 +334,13 @@ private class GetAgentList extends OneShotBehaviour{
 /*
  * DF register method
  */
-protected void register(){
+protected void register() {
 	// Register the trader-agent service in the yellow pages 
 	DFAgentDescription dfd = new DFAgentDescription(); 
 	dfd.setName(getAID()); 
 	ServiceDescription sd = new ServiceDescription(); 
-	sd.setType("trader-agent"); 
-	sd.setName("TraderAgent"+System.currentTimeMillis()); //Gives each agent unique name 
+	sd.setType(serviceType);
+	sd.setName("TraderAgent" + System.currentTimeMillis()); //Gives each agent unique name
 	dfd.addServices(sd); 
 	try { 
 		DFService.register(this, dfd); 
@@ -359,18 +353,19 @@ protected void register(){
 /**
  * Inventory management class
  */
-private class arrangeInventory extends OneShotBehaviour{
+private class RequestInventoryAndWantedItems extends OneShotBehaviour {
 	public void action() {
-		tItems = tools.GetInventory.getItems();
-		System.out.println(myAgent.getLocalName()+" says: I have these items;");
+		List<String> tItems = tools.Inventory.getRandomItemSet();
+    System.out.println(myAgent.getLocalName()+" says: I have these items;");
 		for (int i = 0; i < 5; i++) {
-			items.add(tItems.get(i));
-			System.out.println(items.get(i));
+			items.add(tItems.remove(0));
+			System.out.println("  " + items.get(i));
 		}
+
 		System.out.println(myAgent.getLocalName()+" says: I want these items;");
-		for (int i = 5; i < 8; i++) {
-			wantedItems.add(tItems.get(i));
-			System.out.println(wantedItems.get(i-5));		
+		while (tItems.size() > 0) {
+			wantedItems.add(tItems.remove(0));
+			System.out.println("  " + wantedItems.get(wantedItems.size() - 1));
 		}
 		System.out.println("");
 	}

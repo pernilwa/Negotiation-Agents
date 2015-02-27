@@ -12,7 +12,7 @@ public class Inventory {
 																		 "boots","potion","tent","belt"));
 	static ArrayList<Integer> values = new ArrayList<Integer>(Arrays.asList(35, 30, 15, 10, 10, 55, 30, 25, 30, 15, 15, 20, 25, 5));
 	
-	public static ArrayList<String> getItems(){
+	public static ArrayList<String> getRandomItemSet(){
 		Collections.shuffle(items);
 		
 		//Items to give to agent, and the items it wants
