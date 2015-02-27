@@ -10,7 +10,11 @@ public class Inventory {
 																		 "amulet","tunic","helmet","mace","armguards",
 																		 "boots","potion","tent","belt"));
 	static ArrayList<Integer> values = new ArrayList<Integer>(Arrays.asList(35, 30, 15, 10, 10, 55, 30, 25, 30, 15, 15, 20, 25, 5));
-	
+
+  public static ArrayList<String> getAllItems() {
+    return new ArrayList<>(items);
+  }
+
 	public static ArrayList<String> getRandomItemSet(){
 		Collections.shuffle(items, rng);
 		
