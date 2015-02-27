@@ -1,16 +1,13 @@
 package agents;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Random;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import jade.content.schema.facets.DocumentationFacet;
 import jade.core.behaviours.SimpleBehaviour;
 import tools.Inventory;
 import jade.core.AID;
 import jade.core.Agent;
-import jade.core.behaviours.Behaviour;
 import jade.core.behaviours.CyclicBehaviour;
 import jade.core.behaviours.OneShotBehaviour;
 import jade.domain.DFService;
@@ -28,36 +25,38 @@ public class TradeAgent extends Agent {
 
   private final static Random rng = new Random(System.currentTimeMillis());
 
-	private ArrayList<String> items = new ArrayList<String>(11);
+	private ArrayList<String> sellingItems = new ArrayList<String>(11);
 	private ArrayList<String> wantedItems = new ArrayList<String>(3);
-	private ArrayList<AID> traderAgents = new ArrayList<AID>();
-	private ArrayList<AID> contactList = new ArrayList<AID>();
 	private int gold = 100;
 
   // Gambling for chance to auction
-  private int currentGamblingRound = 1;
+  private int currentRound = 1;
   private double myRoll;
   private int remainingRolls;
+
+  private int currentBiddingRound = 1;
+  private String activeBiddingRoundID;
+  private int activeBid;
 	
 protected void setup(){
   //You have to say this in your head like the StarCraft unit
   System.out.println(this.getLocalName()+" agent online.");
   register();
 
-  //Get items and wantedItems
+  //Get sellingItems and wantedItems
   addBehaviour(new RequestInventoryAndWantedItems());
 
   //Wait for item checks
-  addBehaviour(new CheckForItem());
+  addBehaviour(new BidOnItems());
 
   //Wait for Trade acceptances
-  addBehaviour(new Trading());
-
-  // Start the gambling round if all traders are present
-  tryInitializeGamblingRound();
+  addBehaviour(new ProcessBidResponses());
 
   // Answer requests to gamble for a chance at the auction
   addBehaviour(new GambleForAuctionChance());
+
+  // Start the gambling round if all traders are present
+  tryInitializeGamblingRound();
 }
 
 /**
@@ -71,7 +70,7 @@ protected void tryInitializeGamblingRound() {
   }
 
   ACLMessage requestToGamble = new ACLMessage(ACLMessage.REQUEST);
-  requestToGamble.setConversationId("gambling-round-" + currentGamblingRound);
+  requestToGamble.setConversationId("gambling-round-" + currentRound);
 
   // Important note, we actually send this message to ourselves too
   // because it makes the code simpler.
@@ -87,16 +86,17 @@ private class GambleForAuctionChance extends CyclicBehaviour {
   public void action() {
     MessageTemplate mt = MessageTemplate.and(
       MessageTemplate.MatchPerformative(ACLMessage.REQUEST),
-      MessageTemplate.MatchConversationId("gambling-round-" + currentGamblingRound)
+      MessageTemplate.MatchConversationId("gambling-round-" + currentRound)
     );
     ACLMessage msg = myAgent.receive(mt);
 
     if(msg != null) {
-      myRoll = rng.nextDouble();
+      // If we don't have any items to sell, we don't want to win the gamble.
+      myRoll = sellingItems.isEmpty() ? 0.0 : rng.nextDouble();
       System.out.println(myAgent.getLocalName() + " rolled a " + myRoll);
 
       ACLMessage reply = new ACLMessage(ACLMessage.INFORM);
-      reply.setConversationId("gambling-round-" + currentGamblingRound);
+      reply.setConversationId("gambling-round-" + currentRound);
       reply.setContent(Double.toString(myRoll));
       AID[] agentList = getAgentList();
       for (AID agent : agentList) {
@@ -123,7 +123,7 @@ private class ReceiveGambleRolls extends CyclicBehaviour {
   public void action() {
     MessageTemplate mt = MessageTemplate.and(
       MessageTemplate.MatchPerformative(ACLMessage.INFORM),
-      MessageTemplate.MatchConversationId("gambling-round-" + currentGamblingRound)
+      MessageTemplate.MatchConversationId("gambling-round-" + currentRound)
     );
     ACLMessage msg = myAgent.receive(mt);
     if (msg != null) {
@@ -132,11 +132,11 @@ private class ReceiveGambleRolls extends CyclicBehaviour {
 
       if (remainingRolls == 0) {
         myAgent.removeBehaviour(this);
-        currentGamblingRound++;
+        currentRound++;
 
         if (myRoll > Collections.max(rolls)) {
           System.out.println(myAgent.getLocalName() + " is the winner if the gambling round");
-          myAgent.addBehaviour(new StartTrading());
+          myAgent.addBehaviour(new SellItem());
         }
       }
     } else {
@@ -145,263 +145,192 @@ private class ReceiveGambleRolls extends CyclicBehaviour {
   }
 }
 
-/**
- * Inner class StartTrading
- * This trader is asked to start trading, it will look at its own wantedItems
- * list and send out requests for that item to the other agents. If nobody
- * has it is removed, if trade is successful or failure it is removed. When no
- * items remain it passes trade priority on to another agent.
- */
-private class StartTrading extends Behaviour {
-	private MessageTemplate mt;
-	private String tradeItem = null;
-	private int bestBid = 0;
-	private AID bestTrader = null;
-	private int repliesCnt = 0;
-	private int receivers = 0;
-	private int step = 0;
-	private int rej = 0;
-	
-	public void action() {
-		switch (step) {
-		case -1:
-			//This agent is done trading
-			block();
-		case 0:
-			//Agent checks whether they have an wantedItem and if they can afford it. If so
-			//move to step 1, otherwise pass trade priority on to next agent.			
-			try {
-				tradeItem = wantedItems.get(0);
-				if(Inventory.getValue(tradeItem) > gold){
-					tradeItem = null;
-					wantedItems.remove(0);
-					step = 0;
-					break;
-				}
-			} catch (IndexOutOfBoundsException e) {
-				System.out.println("No more trade items");
-				System.out.println("This agent is sending trade priority to another agent.");
-				
-				ACLMessage send = new ACLMessage(ACLMessage.CFP);
-				AID next;
-				try {
-					next = contactList.get(0);
-				} catch (IndexOutOfBoundsException e2) {
-					step = -1;
-					break;
-				}
-				
-				send.addReceiver(next);
-				myAgent.send(send);
-				contactList.remove(0);
-				step = -1;
-				break;
-			}
-			
-			System.out.println(myAgent.getLocalName()+" would like "+ tradeItem);
-			step = 1;	
-			break;
+  /**
+   * Standard FPSB auction. Announce what item you're selling, receive bids,
+   * accept the best offer.
+   */
+private class SellItem extends SimpleBehaviour {
+  private final int
+    ANNOUNCE = 0,
+    RECEIVE_BIDS = 1,
+    SEND_ITEM = 2,
+    RECEIVE_PAYMENT = 3,
+    INIT_NEW_GAMBLE = 4,
+    DONE = 5;
+  private int state = ANNOUNCE;
 
-		case 1:		
-			//Send trade request to all other agents
-			
-			ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
-			for (int i = 0; i < contactList.size(); i++) {
-				order.addReceiver(contactList.get(i));
-				receivers++;
-			}
-			order.setContent(tradeItem);
-			order.setConversationId("trade-this");
-			order.setReplyWith("Trade"+System.currentTimeMillis());
-			System.out.println("Sending trade item to available agents: "+tradeItem);
-			System.out.println("Sending to "+receivers+" available agents");
-			myAgent.send(order);
-			//Prepare the template to get the reply
-			mt = MessageTemplate.and(MessageTemplate.MatchConversationId("trade-this"), MessageTemplate.MatchInReplyTo(order.getReplyWith()));
-			step = 2;
-			break;
-			
-		case 2:		
-			//Get all request replies, update bestBid
-			
-			ACLMessage svar = myAgent.receive(mt);
-			if(svar != null){
-				System.out.println("Trade reply in Case 2 was: "+svar.getContent());
-				//Trade received
-				if(svar.getPerformative() == ACLMessage.CONFIRM){
-					//trade is offered
-					int temp = Integer.parseInt(svar.getContent());
-					if(bestBid == 0 || temp < bestBid){
-						//Update bestBid at present
-						bestBid = temp;
-						bestTrader = svar.getSender();
-					}
-				}
-				else if (svar.getPerformative() == ACLMessage.REFUSE){
-					rej++;
-				}					
-				repliesCnt++;
-				if(rej == repliesCnt){
-					System.out.println("None of "+tradeItem+" available.");
-					System.out.println("");
-					wantedItems.remove(0);
-					tradeItem = null;
-					bestBid = 0;
-					bestTrader = null;
-					repliesCnt = 0;
-					receivers = 0;
-					step = 0;
-					rej = 0;
-					step = 0;
-					break;
-				}
-				if(repliesCnt >= receivers){
-					//We got all replies
-					System.out.println("We got all receivers.");
-					step = 3;
-				}
-			}
-			else{
-				block();
-			}
-			break;
-		case 3:
-			System.out.println("Starting Case 3");
-			//Trade agreed upon, update both buyer and seller
-			
-			//Inform seller
-			ACLMessage accept = new ACLMessage(ACLMessage.AGREE);
-			accept.addReceiver(bestTrader);
-			accept.setContent(tradeItem);
-			System.out.println("Sending trade accept to seller");
-			myAgent.send(accept);
-			
-			//Buyer update
-			wantedItems.remove(tradeItem);
-			gold = gold - Inventory.getValue(tradeItem);
+  private final String conversationID = "bidding-round-" + currentBiddingRound;
 
-			step = 5;
-			break;
-		}
-	}
-	public boolean done() {
-		if(step == 5){
-			System.out.println("");
-			tradeItem = null;
-			bestBid = 0;
-			bestTrader = null;
-			repliesCnt = 0;
-			receivers = 0;
-			step = 0;
-			rej = 0;
-			step = 0;
+  private List<AID> traders;
+  private String sellItem;
 
-      tryInitializeGamblingRound();
+  private int bidCount = 0;
+  private AID bestBidder = null;
+  private int bestOffer = 0;
 
-			return false;
-		}
-		return false;
-	}
-	
+  @Override
+  public void action() {
+    MessageTemplate mt;
+
+    switch (state) {
+      case ANNOUNCE:
+        // Pick a random item to sell
+        ACLMessage announceMsg;
+        sellItem = sellingItems.get(rng.nextInt(sellingItems.size()));
+        announceMsg = new ACLMessage(ACLMessage.CFP);
+        announceMsg.setConversationId(conversationID);
+        announceMsg.setContent(sellItem);
+
+        traders = new ArrayList(Arrays.asList(getAgentList()));
+        traders.remove(myAgent.getAID());
+        traders.forEach(announceMsg::addReceiver);
+
+        myAgent.send(announceMsg);
+        state = RECEIVE_BIDS;
+        break;
+      case RECEIVE_BIDS:
+        mt = MessageTemplate.and(
+           MessageTemplate.MatchPerformative(ACLMessage.PROPOSE),
+          MessageTemplate.MatchConversationId(conversationID)
+        );
+        ACLMessage offerMsg = myAgent.receive(mt);
+        if (offerMsg != null) {
+          bidCount++;
+          int bid = Integer.parseInt(offerMsg.getContent());
+          if (bid > bestOffer) {
+            bestBidder = offerMsg.getSender();
+            bestOffer = bid;
+          }
+
+          if (bidCount == traders.size()) {
+            state = SEND_ITEM;
+          }
+        } else {
+          block();
+        }
+        break;
+      case SEND_ITEM:
+        // Reject losing bids
+        ACLMessage reject = new ACLMessage(ACLMessage.REJECT_PROPOSAL);
+        reject.setConversationId(conversationID);
+        traders.forEach(t -> {
+          if (!t.equals(bestBidder)) reject.addReceiver(t);
+        });
+        myAgent.send(reject);
+
+        if (bestBidder != null) {
+          ACLMessage accept = new ACLMessage(ACLMessage.ACCEPT_PROPOSAL);
+          accept.setConversationId(conversationID);
+          accept.setContent(sellItem);
+          sellingItems.remove(sellItem);
+          myAgent.send(accept);
+          System.out.printf(
+            "%s says: accepting bid of %d from %s, and sending item\n",
+            myAgent.getLocalName(),
+            bestOffer,
+            bestBidder.getLocalName()
+          );
+
+          state = RECEIVE_PAYMENT;
+        } else {
+          System.out.println(myAgent.getLocalName() + "says: no bid was accepted");
+          state = INIT_NEW_GAMBLE;
+        }
+        break;
+      case RECEIVE_PAYMENT:
+        mt = MessageTemplate.and(
+          MessageTemplate.MatchPerformative(ACLMessage.INFORM),
+          MessageTemplate.MatchConversationId(conversationID)
+        );
+        ACLMessage paymentMsg = myAgent.receive(mt);
+        int payment = Integer.parseInt(paymentMsg.getContent());
+        System.out.println(myAgent.getLocalName() + " says: received payment of " + payment);
+        gold += payment;
+        state = INIT_NEW_GAMBLE;
+        break;
+      case INIT_NEW_GAMBLE:
+        currentBiddingRound++;
+        tryInitializeGamblingRound();
+        state = DONE;
+        break;
+    }
+  }
+
+  @Override
+  public boolean done() {
+    return state == DONE;
+  }
 }
 
 /**
- * Inner class CheckForItem
- * This class responds to trade requests from TA agent. Check to see if we have
- * the item requested and if so send confirm back.
+ * Bids on items it wants by replying to auction CFP messages. Bids either
+ * what it thinks the item is worth, or all it's gold (whichever is lowest).
  */
-private class CheckForItem extends CyclicBehaviour {
-	public void action() {
-		String trItem;
-		MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.REQUEST);
-		ACLMessage msg = myAgent.receive(mt);
-		
-		if(msg != null){
-			trItem = msg.getContent();
-			ACLMessage reply = msg.createReply();
-			System.out.println(myAgent.getLocalName()+" agent checking for item: "+trItem);
+private class BidOnItems extends CyclicBehaviour {
+  public void action() {
+    MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.CFP);
+    ACLMessage msg = myAgent.receive(mt);
+    if (msg != null) {
+      String item = msg.getContent();
+      ACLMessage propose = msg.createReply();
+      propose.setPerformative(ACLMessage.PROPOSE);
+      activeBiddingRoundID = msg.getConversationId();
 
-      if (items.contains(trItem)) {;
-					System.out.println(myAgent.getLocalName()+" agent has that item for sale");
-					int bid = Inventory.getValue(trItem);
-					reply.setPerformative(ACLMessage.CONFIRM);
-					reply.setContent(Integer.toString(bid));
-			} else {
-					// We don't have that item
-					reply.setPerformative(ACLMessage.REFUSE);
-					reply.setContent("not-available");
-			}
-			myAgent.send(reply);
-		} else {
-			block();
-		}
-	}
-	
-}//End of inner class CheckForItem
+      if (wantedItems.contains(item)) {
+        activeBid = Math.min(gold, Inventory.getValue(item));
+        propose.setContent(Integer.toString(activeBid));
+
+        System.out.printf("%s says: bidding %d on %s\n",
+          myAgent.getLocalName(), activeBid, item
+        );
+      } else {
+        propose.setContent("-1");
+      }
+
+      // TODO: this is a bit of a hack to increment bidding round id globally.
+      Matcher matcher = Pattern.compile("\\d+").matcher(activeBiddingRoundID);
+      currentBiddingRound = Integer.parseInt(matcher.group());
+
+      myAgent.send(propose);
+    } else {
+      block();
+    }
+  }
+}
 
 /**
- * Inner class Trader
- * Handles acceptance of trades
+ * Looks at the answer it gets on it's bids and sends the payment if
+ * it's accepted.
  */
-private class Trading extends CyclicBehaviour {
+private class ProcessBidResponses extends CyclicBehaviour {
+  public void action() {
+    MessageTemplate mt = MessageTemplate.and(
+      MessageTemplate.MatchConversationId(activeBiddingRoundID),
+      MessageTemplate.or(
+        MessageTemplate.MatchPerformative(ACLMessage.REJECT_PROPOSAL),
+        MessageTemplate.MatchPerformative(ACLMessage.ACCEPT_PROPOSAL)
+      )
+    );
+    ACLMessage msg = myAgent.receive(mt);
+    if (msg != null) {
+      if (msg.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
+        ACLMessage reply = msg.createReply();
+        reply.setPerformative(ACLMessage.INFORM);
+        reply.setContent(Integer.toString(activeBid));
+        gold -= activeBid;
+        wantedItems.remove(msg.getContent());
+        System.out.printf("%s says: received %s from, sending back %d\n",
+          myAgent.getLocalName(), msg.getContent(), activeBid
+        );
+      }
 
-	public void action() {
-		
-		MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.AGREE);
-		ACLMessage msg = myAgent.receive(mt);
-		if(msg != null){
-			//Update based upon sold item		
-			items.remove(msg.getContent());
-			gold += Inventory.getValue(msg.getContent());
-		}
-		else{
-			block();
-		}
-
-	}
-}//End of inner class Trading
-
-/**
- * Inner class GetAgentList
- * Retrieves other available trader agents from DF agent
- * and adds them to traderAgents list.
- */
-@Deprecated
-private class GetAgentList extends OneShotBehaviour {
-	public void action() {
-	if(traderAgents.isEmpty()){
-		System.out.println(myAgent.getLocalName()+" says: Getting registered trading agents.");
-		
-		DFAgentDescription template = new DFAgentDescription();
-		ServiceDescription sd = new ServiceDescription();
-		sd.setType(SERVICE_TYPE);
-		template.addServices(sd);
-		
-		try{
-			DFAgentDescription[] result = DFService.search(myAgent, template);	
-			System.out.println(myAgent.getLocalName()+" says: Found "+(result.length-1)+" agents, acquiring.");
-			for (int i = 0; i < result.length; ++i) {	
-				if (result[i].getName().equals(myAgent)) {
-					continue;
-				}
-
-				traderAgents.add(result[i].getName());
-			}
-			
-			System.out.println("Agent list: ");
-			for (int i = 0; i < traderAgents.size(); i++) {
-				System.out.println("Agent #" + i + "-" +traderAgents.get(i));
-			}
-		}
-		catch(FIPAException fe){
-			System.out.println("Something went wrong Jimmy, Butters is dead (Trader agent - GetAgentList");
-			fe.printStackTrace();
-		}
-		contactList = traderAgents;
-		System.out.println("--\n");
-	}
-} 	
-}// End of inner class getAgentList
+      activeBid = 0;
+      activeBiddingRoundID = "";
+    } else {
+      block();
+    }
+  }
+}
 
 protected AID[] getAgentList() {
   AID[] agents;
@@ -450,10 +379,10 @@ protected void register() {
 private class RequestInventoryAndWantedItems extends OneShotBehaviour {
 	public void action() {
 		List<String> tItems = tools.Inventory.getRandomItemSet();
-    System.out.println(myAgent.getLocalName()+" says: I have these items;");
+    System.out.println(myAgent.getLocalName()+" says: I'm selling these items;");
 		for (int i = 0; i < 5; i++) {
-			items.add(tItems.remove(0));
-			System.out.println("  " + items.get(i));
+			sellingItems.add(tItems.remove(0));
+			System.out.println("  " + sellingItems.get(i));
 		}
 
 		System.out.println(myAgent.getLocalName()+" says: I want these items;");
