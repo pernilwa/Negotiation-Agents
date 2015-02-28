@@ -107,15 +107,16 @@ public class LootDistributorAgent extends Agent {
       for (AID trader : traders) {
         ACLMessage have = new ACLMessage(ACLMessage.INFORM);
         have.addReceiver(trader);
-        have.setContent("have " +
-          itemsTraderHas.get(trader).stream().collect(Collectors.joining(" "))
+        have.setContent("have|" +
+          itemsTraderHas.get(trader).stream().collect(Collectors.joining("|"))
         );
 
         ACLMessage want = new ACLMessage(ACLMessage.INFORM);
         want.addReceiver(trader);
-        want.setContent("want " +
-            itemsTraderWants.get(trader).stream().collect(Collectors.joining(" "))
+        want.setContent("want|" +
+            itemsTraderWants.get(trader).stream().collect(Collectors.joining("|"))
         );
+
 
         System.out.printf("%s says: sending message '%s' to %s\n",
           myAgent.getLocalName(),
@@ -127,6 +128,7 @@ public class LootDistributorAgent extends Agent {
           want.getContent(),
           trader.getLocalName()
         );
+
         myAgent.send(have);
         myAgent.send(want);
       }

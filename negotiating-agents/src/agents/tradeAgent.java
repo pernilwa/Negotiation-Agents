@@ -5,13 +5,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import jade.core.behaviours.OneShotBehaviour;
 import jade.core.behaviours.SimpleBehaviour;
-import jade.tools.sniffer.Message;
 import tools.Inventory;
 import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.CyclicBehaviour;
-import jade.core.behaviours.OneShotBehaviour;
 import jade.domain.DFService;
 import jade.domain.FIPAException;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
@@ -34,7 +33,7 @@ public class TradeAgent extends Agent {
   // Gambling for chance to auction
   private int currentRound = 1;
   private double myRoll;
-  private int remainingRolls;
+  private int receivedRolls;
   // Sometimes, if agents start at the same time, you might get spammed
   // with requests to gamble. We use this int to make sure you only gamble
   // in one round once.
@@ -84,6 +83,15 @@ protected void tryInitializeGamblingRound() {
   send(requestToGamble);
 }
 
+protected void printStatus() {
+  System.out.printf("%s status\n  gold: %d\n  selling: %s\n  buying: %s\n",
+    getLocalName(),
+    gold,
+    sellingItems.stream().collect(Collectors.joining(", ")),
+    wantedItems.stream().collect(Collectors.joining(", "))
+  );
+}
+
 /**
  * Rolls a dice (double 0-1) and sends the results to all other traders
  */
@@ -98,6 +106,24 @@ private class GambleForAuctionChance extends CyclicBehaviour {
     ACLMessage msg = myAgent.receive(mt);
 
     if(msg != null && !msg.getConversationId().equals(lastRoundRolledIn)) {
+      printStatus();
+      // TODO: hack to make the bidding terminate
+
+      if (wantedItems.size() == 0 && sellingItems.size() == 0) {
+        myAgent.addBehaviour(new OneShotBehaviour() {
+          public void action() {
+            try {
+              DFService.deregister(myAgent);
+            } catch (FIPAException e) {
+              e.printStackTrace();
+            }
+            doDelete();
+          }
+        });
+      }
+
+
+
       // If we don't have any items to sell, we don't want to win the gamble.
       myRoll = sellingItems.isEmpty() ? 0.0 : rng.nextDouble();
       System.out.printf("%s says: I rolled a %f in round %s\n",
@@ -114,7 +140,7 @@ private class GambleForAuctionChance extends CyclicBehaviour {
       }
 
       myAgent.send(reply);
-      remainingRolls = agentList.length - 1;
+      receivedRolls = 1;
       myAgent.addBehaviour(new ReceiveGambleRolls());
 
       lastRoundRolledIn = gamblingRoundID;
@@ -138,9 +164,9 @@ private class ReceiveGambleRolls extends CyclicBehaviour {
     ACLMessage msg = myAgent.receive(mt);
     if (msg != null) {
       rolls.add(Double.parseDouble(msg.getContent()));
-      remainingRolls--;
+      receivedRolls++;
 
-      if (remainingRolls == 0) {
+      if (receivedRolls == getAgentList().length) {
         currentRound++;
 
         if (myRoll > Collections.max(rolls)) {
@@ -415,7 +441,7 @@ protected void register() {
 	sd.setName("TraderAgent" + System.currentTimeMillis()); //Gives each agent unique name
 	dfd.addServices(sd); 
 	try { 
-		DFService.register(this, dfd); 
+		DFService.register(this, dfd);
 	} 
 	catch (FIPAException fe) { 
 		fe.printStackTrace(); 
@@ -447,7 +473,7 @@ private class RequestInventoryAndWantedItems extends SimpleBehaviour {
         MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.INFORM);
         ACLMessage msg = myAgent.receive(mt);
         if (msg != null) {
-          String[] content = msg.getContent().split(" ");
+          String[] content = msg.getContent().split(Pattern.quote("|"));
           ArrayList<String> items = new ArrayList<>();
           for (int i = 1; i < content.length; i++) {
             items.add(content[i]);
@@ -465,6 +491,7 @@ private class RequestInventoryAndWantedItems extends SimpleBehaviour {
           }
 
           if (done()) {
+            state = DONE;
             tryInitializeGamblingRound();
           }
         } else {
