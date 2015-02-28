@@ -112,6 +112,7 @@ private class GambleForAuctionChance extends CyclicBehaviour {
       if (wantedItems.size() == 0 && sellingItems.size() == 0) {
         myAgent.addBehaviour(new OneShotBehaviour() {
           public void action() {
+            System.out.println(myAgent.getLocalName() + " saying goodbye!");
             try {
               DFService.deregister(myAgent);
             } catch (FIPAException e) {
@@ -177,7 +178,7 @@ private class ReceiveGambleRolls extends CyclicBehaviour {
         myAgent.removeBehaviour(this);
       }
     } else {
-      block();
+      block(100);
     }
   }
 }
