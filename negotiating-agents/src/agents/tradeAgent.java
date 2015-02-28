@@ -6,6 +6,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import jade.core.behaviours.SimpleBehaviour;
+import jade.tools.sniffer.Message;
 import tools.Inventory;
 import jade.core.AID;
 import jade.core.Agent;
@@ -59,9 +60,6 @@ protected void setup(){
 
   // Answer requests to gamble for a chance at the auction
   addBehaviour(new GambleForAuctionChance());
-
-  // Start the gambling round if all traders are present
-  tryInitializeGamblingRound();
 }
 
 /**
@@ -382,6 +380,29 @@ protected AID[] getAgentList() {
   }
 }
 
+  /**
+   * Returns the AID of the loot distributor agent, or null
+   */
+protected AID getLootDistributorAgent() {
+  DFAgentDescription template = new DFAgentDescription();
+  ServiceDescription sd = new ServiceDescription();
+  sd.setType(LootDistributorAgent.SERVICE_TYPE);
+  template.addServices(sd);
+
+  try {
+    DFAgentDescription[] result = DFService.search(this, template);
+    if (result.length > 0) {
+      return result[0].getName();
+    } else {
+      return null;
+    }
+  }
+  catch (FIPAException fe) {
+    fe.printStackTrace();
+    return null;
+  }
+}
+
 /*
  * DF register method
  */
@@ -404,23 +425,60 @@ protected void register() {
 /**
  * Inventory management class
  */
-private class RequestInventoryAndWantedItems extends OneShotBehaviour {
+private class RequestInventoryAndWantedItems extends SimpleBehaviour {
+  private static final int SEARCHING = 0, WAITING = 1, DONE = 2;
+  private int state = SEARCHING;
 	public void action() {
-		List<String> tItems = tools.Inventory.getRandomItemSet();
-		for (int i = 0; i < 5; i++) {
-			sellingItems.add(tItems.remove(0));
-		}
+    AID lootDistributor = null;
+    switch (state) {
+      case SEARCHING:
+        lootDistributor = getLootDistributorAgent();
+        if (lootDistributor != null) {
+          ACLMessage request = new ACLMessage(ACLMessage.REQUEST);
+          request.addReceiver(lootDistributor);
+          myAgent.send(request);
+          state = WAITING;
+        } else {
+          block(100);
+        }
+        break;
+      case WAITING:
+        //MessageTemplate mt = MessageTemplate.MatchSender(lootDistributor);
+        MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.INFORM);
+        ACLMessage msg = myAgent.receive(mt);
+        if (msg != null) {
+          String[] content = msg.getContent().split(" ");
+          ArrayList<String> items = new ArrayList<>();
+          for (int i = 1; i < content.length; i++) {
+            items.add(content[i]);
+          }
+          if (content[0].equals("have")) {
+            sellingItems = items;
+            System.out.printf("%s says: I'm selling these items [%s]\n",
+              myAgent.getLocalName(), sellingItems.stream().collect(Collectors.joining(", "))
+            );
+          } else if (content[0].equals("want")) {
+            wantedItems = items;
+            System.out.printf("%s says: I'm buying these items [%s]\n",
+              myAgent.getLocalName(), wantedItems.stream().collect(Collectors.joining(", "))
+            );
+          }
 
-		while (tItems.size() > 0) {
-			wantedItems.add(tItems.remove(0));
-		}
-
-    System.out.printf("%s says: I'm selling these items [%s]\n",
-      myAgent.getLocalName(), sellingItems.stream().collect(Collectors.joining(", "))
-    );
-    System.out.printf("%s says: I'm buying these items [%s]\n",
-      myAgent.getLocalName(), wantedItems.stream().collect(Collectors.joining(", "))
-    );
+          if (done()) {
+            tryInitializeGamblingRound();
+          }
+        } else {
+          block();
+        }
+        break;
+      case DONE:
+        break;
+    }
 	}
+
+  @Override
+  public boolean done() {
+    return !sellingItems.isEmpty() && !wantedItems.isEmpty();
+  }
 }//End
 }

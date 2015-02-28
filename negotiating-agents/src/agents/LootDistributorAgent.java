@@ -69,15 +69,22 @@ public class LootDistributorAgent extends Agent {
 
       List<String> allItems = Inventory.getAllItems();
       Collections.shuffle(allItems, rng);
-      int itemsPerTrader = allItems.size() / traders.size();
+
+      System.out.printf("%s says: distributing loot to %s\n",
+        myAgent.getLocalName(),
+        traders.stream().map(AID::getLocalName).collect(Collectors.joining(", "))
+      );
+      System.out.printf("%s says: distributing items: %s\n",
+        myAgent.getLocalName(),
+        allItems.stream().collect(Collectors.joining(", "))
+      );
 
       Map<AID, List<String>> itemsTraderHas = new HashMap<>();
       // Distribute items evenly among all the traders
       for (int i = 0; !allItems.isEmpty(); i = (i + 1) % traders.size()) {
         AID trader = traders.get(i);
-        itemsTraderHas
-          .putIfAbsent(trader, new ArrayList<>())
-          .add(allItems.remove(0));
+        itemsTraderHas.putIfAbsent(trader, new ArrayList<>());
+        itemsTraderHas.get(trader).add(allItems.remove(0));
       }
 
       allItems = Inventory.getAllItems();
@@ -91,7 +98,8 @@ public class LootDistributorAgent extends Agent {
         for (int j = 0; j < allItems.size(); j++) {
           String item = allItems.get(j);
           if (hasList.contains(item)) continue;
-          itemsTraderWants.putIfAbsent(trader, new ArrayList<>()).add(item);
+          itemsTraderWants.putIfAbsent(trader, new ArrayList<>());
+          itemsTraderWants.get(trader).add(item);
           allItems.remove(j);
         }
       }
@@ -105,10 +113,20 @@ public class LootDistributorAgent extends Agent {
 
         ACLMessage want = new ACLMessage(ACLMessage.INFORM);
         want.addReceiver(trader);
-        have.setContent("want " +
+        want.setContent("want " +
             itemsTraderWants.get(trader).stream().collect(Collectors.joining(" "))
         );
 
+        System.out.printf("%s says: sending message '%s' to %s\n",
+          myAgent.getLocalName(),
+          have.getContent(),
+          trader.getLocalName()
+        );
+        System.out.printf("%s says: sending message '%s' to %s\n",
+          myAgent.getLocalName(),
+          want.getContent(),
+          trader.getLocalName()
+        );
         myAgent.send(have);
         myAgent.send(want);
       }
